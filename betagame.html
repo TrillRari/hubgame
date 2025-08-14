@@ -1,0 +1,632 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Beta 3D – 3e personne (Canvas)</title>
+  <style>
+    html, body { height: 100%; margin: 0; background:#0b0f1a; overflow:hidden; font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, "Helvetica Neue", Arial, "Apple Color Emoji", "Segoe UI Emoji"; }
+    #ui { position: fixed; top: 12px; left: 12px; right: 12px; display:flex; gap:12px; align-items: flex-start; z-index: 10; pointer-events:none; flex-wrap: wrap; }
+    .card { pointer-events:auto; background: rgba(255,255,255,0.06); color:#e6e6e6; backdrop-filter: blur(8px); border:1px solid rgba(255,255,255,0.12); border-radius:16px; padding:12px 14px; box-shadow: 0 10px 30px rgba(0,0,0,0.35); }
+    .title { font-weight: 700; letter-spacing: .3px; font-size: 14px; }
+    .small { opacity:.8; font-size: 12px; line-height:1.4; }
+    #fps { font-variant-numeric: tabular-nums; }
+    #canvas { display:block; width:100vw; height:100vh; }
+    /* Simple on-screen joystick (mobile optional) */
+    #stick { position:fixed; bottom: 26px; left: 26px; width:120px; height:120px; border-radius: 999px; background: rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.15); display:none; touch-action: none; }
+    #nub { position:absolute; left:50%; top:50%; width:54px; height:54px; margin-left:-27px; margin-top:-27px; border-radius:999px; background: rgba(255,255,255,0.18); border:1px solid rgba(255,255,255,0.2); }
+    #crosshair { position:fixed; left:50%; top:50%; width:8px; height:8px; margin-left:-4px; margin-top:-4px; border-radius:50%; background: rgba(255,255,255,0.9); box-shadow: 0 0 8px rgba(255,255,255,0.7); pointer-events:none; }
+    #banner { position:fixed; top:50%; left:50%; transform: translate(-50%, -50%); background: rgba(0,0,0,0.55); color:#fff; padding:16px 22px; border-radius:14px; font-weight:700; letter-spacing:.5px; box-shadow: 0 10px 40px rgba(0,0,0,0.5); display:none; pointer-events:none; }
+    /* HP bar */
+    #hpwrap { pointer-events:auto; background: rgba(255,255,255,0.06); color:#e6e6e6; backdrop-filter: blur(8px); border:1px solid rgba(255,255,255,0.12); border-radius:16px; padding:10px 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.35); width:220px; }
+    #hplabel { font-weight:700; font-size:12px; margin-bottom:6px; display:flex; justify-content:space-between; }
+    #hpbar { height:10px; background: rgba(255,255,255,0.12); border-radius:999px; overflow:hidden; }
+    #hpfill { height:100%; width:100%; background: linear-gradient(90deg, #19e68c, #e6ff7a); transform-origin:left; }
+  </style>
+</head>
+<body>
+  <div id="ui">
+    <div class="card">
+      <div class="title">🎮 Beta 3D – Vue 3e personne</div>
+      <div class="small">ZQSD / WASD = déplacer (G/D inversés) · Espace = sauter · <strong>Maintiens clic gauche + déplace = caméra</strong> · <strong>Clic bref = tirer</strong> · R = recadrer</div>
+    </div>
+    <div id="stats" class="card small">FPS: <span id="fps">—</span></div>
+    <div class="card small">Score: <span id="score">0</span></div>
+    <div class="card small">Niveau: <span id="level">1</span></div>
+    <div class="card small">Zone: <span id="zoneTimer">60s</span></div>
+    <div id="hpwrap">
+      <div id="hplabel"><span>Vie</span><span id="hptext">100/100</span></div>
+      <div id="hpbar"><div id="hpfill"></div></div>
+    </div>
+  </div>
+  <div id="stick"><div id="nub"></div></div>
+  <div id="crosshair" aria-hidden="true"></div>
+  <div id="banner">Niveau 1</div>
+  <canvas id="canvas"></canvas>
+
+  <script type="module">
+    import * as THREE from 'https://unpkg.com/three@0.160.1/build/three.module.js';
+
+    // ---------- Utils ----------
+    const PI = Math.PI; const PI2 = Math.PI * 2;
+    function lerpAngleWrapped(a, b, t){
+      t = THREE.MathUtils.clamp(t, 0, 1);
+      let diff = (b - a) % PI2;
+      if (diff > PI) diff -= PI2;
+      if (diff < -PI) diff += PI2;
+      return a + diff * t;
+    }
+    const approxEqual = (a, b, eps = 1e-3) => Math.abs(a - b) < eps;
+
+    function enemiesForLevel(level){
+      const base = 10, inc = 6;
+      return Math.max(1, base + (level-1)*inc);
+    }
+    function computeWish(yaw, f, r){
+      // inversion G/D demandée
+      r = -r;
+      const forward = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw));
+      const right   = new THREE.Vector3(Math.cos(yaw), 0, -Math.sin(yaw));
+      return new THREE.Vector3().addScaledVector(forward, f).addScaledVector(right, r);
+    }
+    function safeRadiusAt(start, min, duration, elapsed){
+      const t = THREE.MathUtils.clamp(elapsed / Math.max(0.0001, duration), 0, 1);
+      return THREE.MathUtils.lerp(start, min, t);
+    }
+    const isOutsideRadius = (v, R) => Math.hypot(v.x, v.z) > R + 1e-6;
+    const breachDamage = (wasInside, isInside) => (!wasInside && !isInside) ? 0 : (wasInside && !isInside ? 10 : 0);
+
+    // Clamp XZ to a given radius
+    function clampXZToRadius(position, radius){
+      const xzLength = Math.hypot(position.x, position.z);
+      if (xzLength > radius){
+        const scale = radius / xzLength;
+        position.x *= scale;
+        position.z *= scale;
+      }
+    }
+
+    // ----- Renderer & Scene -----
+    const canvas = document.getElementById('canvas');
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x0b0f1a);
+
+    const camera = new THREE.PerspectiveCamera(70, 2, 0.1, 1000);
+
+    // Lighting
+    const hemi = new THREE.HemisphereLight(0xbdd4ff, 0x202034, 1.0);
+    scene.add(hemi);
+    const dir = new THREE.DirectionalLight(0xffffff, 1.0);
+    dir.position.set(5, 8, -6);
+    dir.castShadow = true;
+    dir.shadow.mapSize.set(1024, 1024);
+    scene.add(dir);
+
+    // Ground
+    const groundSize = 200;
+    const groundGeo = new THREE.PlaneGeometry(groundSize, groundSize, 1, 1);
+    const groundMat = new THREE.MeshStandardMaterial({ color: 0x1a2333, metalness: 0.1, roughness: 0.9 });
+    const ground = new THREE.Mesh(groundGeo, groundMat);
+    ground.rotation.x = -Math.PI / 2;
+    ground.receiveShadow = true;
+    scene.add(ground);
+
+    const grid = new THREE.GridHelper(groundSize, groundSize / 2, 0x37507a, 0x263b5a);
+    grid.position.y = 0.001;
+    scene.add(grid);
+
+    // Safe zone ring
+    const ringMat = new THREE.MeshBasicMaterial({ color: 0xffd166, transparent: true, opacity: 0.9, side: THREE.DoubleSide });
+    let ring = new THREE.Mesh(new THREE.RingGeometry(5.5, 6.2, 64), ringMat);
+    ring.rotation.x = -Math.PI/2; ring.position.y = 0.02;
+    scene.add(ring);
+
+    // Simple obstacles
+    const boxes = new THREE.Group();
+    scene.add(boxes);
+    const boxMat = new THREE.MeshStandardMaterial({ color: 0x6ea8fe, metalness:0.2, roughness:0.6 });
+    for (let i = 0; i < 20; i++) {
+      const s = 0.5 + Math.random() * 2.5;
+      const geo = new THREE.BoxGeometry(s, s, s);
+      const m = new THREE.Mesh(geo, boxMat.clone());
+      m.position.set((Math.random() - 0.5) * 80, s / 2, (Math.random() - 0.5) * 80);
+      m.castShadow = true; m.receiveShadow = true;
+      boxes.add(m);
+    }
+
+    // Player (capsule)
+    const player = new THREE.Group();
+    const bodyGeo = new THREE.CapsuleGeometry(0.4, 0.9, 8, 16);
+    const bodyMat = new THREE.MeshStandardMaterial({ color: 0xffd166, metalness:0.2, roughness:0.6 });
+    const body = new THREE.Mesh(bodyGeo, bodyMat);
+    body.castShadow = true; body.receiveShadow = true;
+    player.add(body);
+    scene.add(player);
+
+    // Player state
+    const state = {
+      pos: new THREE.Vector3(0, 1.25, 0),
+      vel: new THREE.Vector3(),
+      dir: new THREE.Vector3(),
+      yaw: 0,
+      pitch: 0,
+      onGround: false,
+      bodyYaw: 0,
+      time: 0,
+      score: 0,
+      level: 1,
+      enemiesAlive: 0,
+      // Shrinking zone
+      zone: { duration: 60, elapsed: 0, startR: 95, minR: 14 },
+      // Health
+      hp: 100,
+      hpMax: 100,
+      alive: true,
+      wasInsideZone: true,
+      zoneBreachCooldown: 0,
+      touchCooldown: 0,
+    };
+
+    // Camera follow
+    const camOffsetDefault = new THREE.Vector3(0, 2.0, -5.0);
+    let camOffset = camOffsetDefault.clone();
+
+    function updateCamera(dt){
+      const target = state.pos.clone();
+      const rot = new THREE.Euler(0, state.yaw, 0, 'YXZ');
+      const offset = camOffset.clone().applyEuler(rot);
+      const desired = target.clone().add(offset);
+      camera.position.lerp(desired, 1 - Math.pow(0.001, dt));
+      camera.lookAt(target.x, target.y + 1.0, target.z);
+    }
+
+    // Input clavier
+    const keys = new Set();
+    const keyMap = {
+      'KeyW': 'forward', 'ArrowUp': 'forward', 'KeyZ': 'forward',
+      'KeyS': 'back',    'ArrowDown': 'back',
+      'KeyA': 'left',    'ArrowLeft': 'left', 'KeyQ': 'left',
+      'KeyD': 'right',   'ArrowRight': 'right',
+      'Space': 'jump',
+    };
+    addEventListener('keydown', (e)=>{ if (keyMap[e.code]) keys.add(keyMap[e.code]); if(e.code==='KeyR'){ state.yaw=0; state.pitch=0; } });
+    addEventListener('keyup',   (e)=>{ if (keyMap[e.code]) keys.delete(keyMap[e.code]); });
+
+    // Souris: maintenir clic gauche pour tourner; clic bref pour tirer
+    let dragging = false; let lastX=0, lastY=0;
+    let dragMoved = false; let dragStart = 0;
+    const CLICK_TIME_MS = 250;   // max pour considérer un "clic bref"
+    const MOVE_PX = 5;           // delta de mouvement au-delà duquel on considère un drag
+
+    window.addEventListener('mousedown', (e)=>{
+      if (e.button !== 0) return; // on n'utilise que le clic gauche
+      dragging = true;
+      dragMoved = false;
+      dragStart = performance.now();
+      lastX = e.clientX; lastY = e.clientY;
+    });
+
+    window.addEventListener('mouseup', (e)=>{
+      if (e.button !== 0) return;
+      const wasDragging = dragging;
+      dragging = false;
+      const dt = performance.now() - dragStart;
+      // Si pas de mouvement significatif et clic court -> tirer
+      if (wasDragging && !dragMoved && dt <= CLICK_TIME_MS && state.alive){
+        shoot();
+      }
+    });
+
+    window.addEventListener('mousemove', (e)=>{
+      if(!dragging) return;
+      const dx = e.clientX - lastX; const dy = e.clientY - lastY;
+      if (!dragMoved && Math.hypot(dx, dy) >= MOVE_PX) dragMoved = true;
+      lastX = e.clientX; lastY = e.clientY;
+      state.yaw   -= dx * 0.005;
+      state.pitch -= dy * 0.003;
+      state.pitch  = Math.max(-0.6, Math.min(0.8, state.pitch));
+      camOffset.y  = THREE.MathUtils.lerp(camOffset.y, camOffsetDefault.y + state.pitch * 2.0, 0.5);
+    });
+
+    // Sécurités: si on perd le focus ou sort du canvas, on stoppe le drag
+    window.addEventListener('blur', ()=>{ dragging = false; });
+    document.getElementById('canvas').addEventListener('mouseleave', ()=>{ dragging = false; });
+    // On garde le contextmenu autorisé; si tu veux le bloquer, décommente:
+    // window.addEventListener('contextmenu', (e)=> e.preventDefault());
+
+    // Touch joystick (mobile)
+    const stick = document.getElementById('stick');
+    const nub = document.getElementById('nub');
+    const isMobile = /Mobi|Android/i.test(navigator.userAgent);
+    if (isMobile) stick.style.display = 'block';
+    let joy = {x:0, y:0};
+    stick.addEventListener('touchstart', (e)=>{ e.preventDefault(); });
+    stick.addEventListener('touchmove', (e)=>{
+      e.preventDefault();
+      const rect = stick.getBoundingClientRect();
+      const t = e.touches[0];
+      const cx = rect.left + rect.width/2;
+      const cy = rect.top + rect.height/2;
+      let dx = (t.clientX - cx) / (rect.width/2);
+      let dy = (t.clientY - cy) / (rect.height/2);
+      const len = Math.hypot(dx, dy);
+      if (len>1){ dx/=len; dy/=len; }
+      joy.x = dx; joy.y = dy;
+      nub.style.transform = `translate(${dx*40}px, ${dy*40}px)`;
+    }, {passive:false});
+    stick.addEventListener('touchend', ()=>{ joy.x=0; joy.y=0; nub.style.transform = 'translate(0,0)'; });
+
+    // Movement & physics
+    const gravity = -25;
+    const moveSpeed = 7.0;
+    const jumpSpeed = 9.5;
+    const playerHeight = 1.25;
+
+    function handleMovement(dt){
+      if(!state.alive) return;
+      let f = 0, r = 0;
+      if (keys.has('forward')) f += 1;
+      if (keys.has('back'))    f -= 1;
+      if (keys.has('left'))    r -= 1;
+      if (keys.has('right'))   r += 1;
+
+      if (isMobile){ f += -joy.y; r += joy.x; }
+
+      // inversion G/D
+      r = -r;
+
+      const len = Math.hypot(f, r);
+      if (len > 0){ f/=len; r/=len; }
+
+      const forward = new THREE.Vector3(Math.sin(state.yaw), 0, Math.cos(state.yaw));
+      const right   = new THREE.Vector3(Math.cos(state.yaw), 0, -Math.sin(state.yaw));
+      const wish = new THREE.Vector3().addScaledVector(forward, f).addScaledVector(right, r);
+
+      state.pos.addScaledVector(wish, moveSpeed * dt);
+
+      if (keys.has('jump') && state.onGround){ state.vel.y = jumpSpeed; state.onGround = false; }
+
+      state.vel.y += gravity * dt;
+      state.pos.y += state.vel.y * dt;
+
+      const minY = playerHeight;
+      if (state.pos.y < minY){
+        state.pos.y = minY;
+        state.vel.y = 0;
+        state.onGround = true;
+      }
+
+      player.position.copy(state.pos);
+
+      if (wish.lengthSq() > 0.0001){
+        const targetYaw = Math.atan2(wish.x, wish.z);
+        state.bodyYaw = lerpAngleWrapped(state.bodyYaw || 0, targetYaw, 1 - Math.pow(0.001, dt));
+        player.rotation.y = state.bodyYaw;
+      }
+    }
+
+    // ---------- Ennemis + Niveaux ----------
+    const enemies = [];
+    const enemiesGroup = new THREE.Group();
+    scene.add(enemiesGroup);
+    const enemyGeo = new THREE.SphereGeometry(0.6, 16, 12);
+    const enemyMat = new THREE.MeshStandardMaterial({ color: 0xff6b6b, metalness:0.15, roughness:0.5, emissive: 0x200000 });
+
+    function clearEnemies(){
+      for (const e of enemies){ if (e.mesh.parent) e.mesh.parent.remove(e.mesh); }
+      enemies.length = 0;
+      state.enemiesAlive = 0;
+    }
+
+    function spawnEnemies(n = 10, speedMul = 1){
+      for(let i=0;i<n;i++){
+        const m = new THREE.Mesh(enemyGeo, enemyMat.clone());
+        const base = new THREE.Vector3((Math.random()-0.5)*70, 0.6, (Math.random()-0.5)*70);
+        m.position.copy(base);
+        m.castShadow = true; m.receiveShadow = true;
+        enemiesGroup.add(m);
+        enemies.push({ mesh: m, base: base.clone(), amp: new THREE.Vector3(4+Math.random()*6, 0, 4+Math.random()*6), speed: (0.22 + Math.random()*0.28)*speedMul, phase: Math.random()*PI2, alive: true, radius: 0.6, touchCD:0 });
+      }
+      state.enemiesAlive = n;
+    }
+
+    function updateEnemies(dt){
+      const t = state.time;
+      const R = currentSafeRadius();
+      const attract = 0.6 + 1.2 * shrinkProgress();
+      for(const e of enemies){
+        e.touchCD = Math.max(0, e.touchCD - dt);
+        if(!e.alive) continue;
+        const ox = Math.sin(t*e.speed + e.phase) * e.amp.x;
+        const oz = Math.cos(t*e.speed + e.phase*0.7) * e.amp.z;
+        // oscillation
+        e.mesh.position.set(e.base.x + ox, e.base.y + 0.0, e.base.z + oz);
+        // attraction centre
+        const toCenter = new THREE.Vector3(-e.mesh.position.x, 0, -e.mesh.position.z).setLength(attract * dt);
+        e.mesh.position.add(toCenter);
+        // clamp à la zone
+        clampXZToRadius(e.mesh.position, Math.max(0, R - 0.8));
+
+        // Contact damage
+        const d2 = e.mesh.position.distanceToSquared(state.pos);
+        const Rcol = e.radius + 0.45;
+        if (d2 <= Rcol*Rcol && e.touchCD <= 0 && state.alive){
+          e.touchCD = 0.45;
+          damage(10, 'contact ennemi');
+        }
+      }
+    }
+
+    function showBanner(text){
+      const el = document.getElementById('banner');
+      el.textContent = text;
+      el.style.display = 'block';
+      el.style.opacity = '0';
+      el.animate([{opacity:0, transform:'translate(-50%, -50%) scale(0.9)'},{opacity:1, transform:'translate(-50%, -50%) scale(1)'}],{duration:240, fill:'forwards'});
+      setTimeout(()=>{
+        el.animate([{opacity:1},{opacity:0}],{duration:350, fill:'forwards'}).onfinish=()=>{ el.style.display='none'; };
+      }, 1200);
+    }
+
+    function startLevel(lvl){
+      state.level = lvl;
+      document.getElementById('level').textContent = String(lvl);
+      clearEnemies();
+      const count = enemiesForLevel(lvl);
+      const speedMul = 1 + (lvl-1)*0.25;
+      spawnEnemies(count, speedMul);
+      // zone
+      state.zone.startR = 95;
+      state.zone.minR = Math.max(8, 14 - (lvl-1)*1.0);
+      state.zone.elapsed = 0;
+      showBanner(`Niveau ${lvl}`);
+    }
+
+    // ---------- Tir / projectiles ----------
+    const bullets = [];
+    const bulletGeo = new THREE.SphereGeometry(0.12, 12, 10);
+    const bulletMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0x404040 });
+    const bulletSpeed = 40;
+    const bulletLife = 2.0;
+
+    function sphereHitTest(p, q, r){
+      return p.distanceToSquared(q) <= r*r;
+    }
+
+    function shoot(){
+      if (!state.alive) return;
+      const dir = new THREE.Vector3();
+      camera.getWorldDirection(dir).normalize();
+      const start = state.pos.clone().add(new THREE.Vector3(0, 1.2, 0)).addScaledVector(dir, 0.8);
+      const m = new THREE.Mesh(bulletGeo, bulletMat.clone());
+      m.position.copy(start);
+      m.castShadow = false; m.receiveShadow = false;
+      scene.add(m);
+      bullets.push({ mesh:m, vel: dir.clone().multiplyScalar(bulletSpeed), life: bulletLife, radius: 0.12 });
+      const flash = new THREE.PointLight(0xffeeaa, 1.5, 4);
+      flash.position.copy(start);
+      scene.add(flash);
+      setTimeout(()=> scene.remove(flash), 60);
+    }
+
+    function updateBullets(dt){
+      for (let i=bullets.length-1; i>=0; i--){
+        const b = bullets[i];
+        b.mesh.position.addScaledVector(b.vel, dt);
+        b.life -= dt;
+        for (const e of enemies){
+          if (!e.alive) continue;
+          const Rcol = e.radius + b.radius;
+          if (sphereHitTest(b.mesh.position, e.mesh.position, Rcol)){
+            e.alive = false;
+            state.enemiesAlive--;
+            const mm = e.mesh;
+            mm.material.emissive.setHex(0x008833);
+            const startS = mm.scale.clone();
+            let t = 0;
+            const pop = ()=>{
+              t += 0.16;
+              mm.scale.setScalar(Math.max(0, startS.x * (1- t)));
+              if (t < 1) requestAnimationFrame(pop); else { enemiesGroup.remove(mm); }
+            };
+            requestAnimationFrame(pop);
+            state.score += 1; document.getElementById('score').textContent = String(state.score);
+            scene.remove(b.mesh);
+            bullets.splice(i,1);
+            if (state.enemiesAlive <= 0){ startLevel(state.level + 1); }
+            break;
+          }
+        }
+        if (i < bullets.length && b.life <= 0){ scene.remove(b.mesh); bullets.splice(i,1); }
+      }
+    }
+
+    // Collision capsule vs AABB (naïf)
+    function capsuleBoxPenetration(box){
+      const spherePos = state.pos.clone();
+      const radius = 0.42;
+      const params = box.geometry.parameters || { width:1, height:1, depth:1 };
+      let hx = (params.width  ?? 1) * 0.5 * box.scale.x;
+      let hy = (params.height ?? 1) * 0.5 * box.scale.y;
+      let hz = (params.depth  ?? 1) * 0.5 * box.scale.z;
+      const min = new THREE.Vector3(box.position.x - hx, box.position.y - hy, box.position.z - hz);
+      const max = new THREE.Vector3(box.position.x + hx, box.position.y + hy, box.position.z + hz);
+
+      const clamped = new THREE.Vector3(
+        THREE.MathUtils.clamp(spherePos.x, min.x, max.x),
+        THREE.MathUtils.clamp(spherePos.y, min.y, max.y),
+        THREE.MathUtils.clamp(spherePos.z, min.z, max.z),
+      );
+      const delta = spherePos.sub(clamped);
+      const d2 = delta.lengthSq();
+      if (d2 < radius*radius){
+        const d = Math.sqrt(d2) || 0.0001;
+        const push = delta.multiplyScalar((radius - d) / d);
+        state.pos.add(push);
+      }
+    }
+    function collideBoxes(){ boxes.children.forEach(b => capsuleBoxPenetration(b)); }
+
+    // ---------- Shrinking zone ----------
+    const zoneTimerEl = document.getElementById('zoneTimer');
+    function shrinkProgress(){ return THREE.MathUtils.clamp(state.zone.elapsed / state.zone.duration, 0, 1); }
+    function currentSafeRadius(){ return safeRadiusAt(state.zone.startR, state.zone.minR, state.zone.duration, state.zone.elapsed); }
+    function updateZone(dt){
+      state.zone.elapsed = Math.min(state.zone.duration, state.zone.elapsed + dt);
+      const remain = Math.max(0, Math.ceil(state.zone.duration - state.zone.elapsed));
+      zoneTimerEl.textContent = remain + 's';
+      const R = currentSafeRadius();
+      const inner = Math.max(0.01, R - 0.6), outer = R + 0.6;
+      ring.geometry.dispose();
+      ring.geometry = new THREE.RingGeometry(inner, outer, 64);
+      ring.rotation.x = -Math.PI/2; ring.position.set(0, 0.02, 0);
+      ring.material.opacity = 0.5 + 0.5 * (1 - shrinkProgress());
+
+      // dégâts à la sortie
+      const insideNow = !isOutsideRadius(state.pos, R);
+      const dmg = breachDamage(state.wasInsideZone, insideNow);
+      if (dmg > 0) damage(dmg, 'sortie de zone');
+      state.wasInsideZone = insideNow;
+    }
+
+    // ---------- Health ----------
+    const hpTextEl = document.getElementById('hptext');
+    const hpFillEl = document.getElementById('hpfill');
+    function updateHPUI(){
+      hpTextEl.textContent = `${state.hp}/${state.hpMax}`;
+      const pct = Math.max(0, Math.min(1, state.hp/state.hpMax));
+      hpFillEl.style.width = `${pct*100}%`;
+      hpFillEl.style.background = pct>0.5? 'linear-gradient(90deg, #19e68c, #e6ff7a)' : pct>0.25? 'linear-gradient(90deg, #ffd166, #ffe08a)' : 'linear-gradient(90deg, #ff6b6b, #ffa8a8)';
+    }
+    function damage(amount, reason){
+      if(!state.alive) return;
+      state.hp = Math.max(0, state.hp - amount);
+      updateHPUI();
+      // petit shake caméra
+      const o = camera.position.clone();
+      camera.position.add(new THREE.Vector3((Math.random()-0.5)*0.2, (Math.random()-0.5)*0.1, (Math.random()-0.5)*0.2));
+      setTimeout(()=> camera.position.copy(o), 50);
+      if (state.hp <= 0){ gameOver(reason); }
+    }
+    function heal(amount){ state.hp = Math.min(state.hpMax, state.hp + amount); updateHPUI(); }
+
+    function gameOver(reason){
+      state.alive = false;
+      showBanner(`💀 KO (${reason})`);
+      setTimeout(()=>{
+        // reset
+        state.hp = state.hpMax; updateHPUI();
+        state.score = 0; document.getElementById('score').textContent = '0';
+        state.pos.set(0, 1.25, 6);
+        state.wasInsideZone = true;
+        startLevel(1);
+        state.alive = true;
+      }, 1600);
+    }
+
+    // Animate
+    let last = performance.now();
+    function resize(){
+      const w = window.innerWidth, h = window.innerHeight;
+      renderer.setSize(w, h, false);
+      camera.aspect = w / h; camera.updateProjectionMatrix();
+    }
+    window.addEventListener('resize', resize); resize();
+
+    // Spawn pos
+    state.pos.set(0, 1.25, 6);
+    updateHPUI();
+
+    // FPS
+    const fpsEl = document.getElementById('fps');
+    let frames = 0, acc = 0;
+
+    function frame(now){
+      const dt = Math.min(0.033, (now - last) / 1000);
+      last = now;
+      state.time += dt;
+
+      updateZone(dt);
+      handleMovement(dt);
+      collideBoxes();
+      updateEnemies(dt);
+      updateBullets(dt);
+      updateCamera(dt);
+
+      renderer.render(scene, camera);
+
+      frames++; acc += dt; if (acc >= 0.5){ fpsEl.textContent = String(Math.round(frames/acc)); frames = 0; acc = 0; }
+
+      requestAnimationFrame(frame);
+    }
+
+    // Initial camera placement
+    camera.position.copy(state.pos.clone().add(new THREE.Vector3(0, 2, -6)));
+    camera.lookAt(state.pos);
+
+    // Start at level 1
+    startLevel(1);
+
+    requestAnimationFrame(frame);
+
+    // ---------- Auto-tests (console seulement) ----------
+    function runTests(){
+      let pass = 0, fail = 0;
+      const assert = (ok, msg)=>{ (ok?pass++:fail++); console[ok?'log':'error'](ok?'✔':'✘', msg); };
+
+      // Interpolation d'angle
+      let a = 0, b = PI, t = 0.5; let r = lerpAngleWrapped(a,b,t);
+      assert(approxEqual(r, PI/2, 1e-3), 'Angle: 0→π t=0.5 ≈ π/2');
+
+      a = PI*0.99; b = -PI*0.99; t = 0.5; r = lerpAngleWrapped(a,b,t);
+      assert(approxEqual(Math.abs(r), PI, 5e-2), 'Angle: 0.99π→-0.99π t=0.5 ≈ ±π');
+
+      a = -3; b = 3; t = 0.5; r = lerpAngleWrapped(a,b,t);
+      assert(approxEqual(r, -PI, 5e-2), 'Angle: -3→3 t=0.5 ≈ -π');
+
+      // Collision sphère-sphère
+      const P = new THREE.Vector3(0,0,0);
+      const Q = new THREE.Vector3(0.5,0,0);
+      const Rsum = 0.6, Rsum2 = 0.4;
+      assert(sphereHitTest(P, Q, Rsum), 'HitTest: collision attendue');
+      assert(!sphereHitTest(P, Q, Rsum2), 'HitTest: pas de collision attendue');
+
+      // Inversion droite/gauche
+      let w = computeWish(0, 0, 1);
+      assert(w.x < -0.9, 'Inversion G/D: r=1 → x≈-1');
+      w = computeWish(0, 0, -1);
+      assert(w.x > 0.9, 'Inversion G/D: r=-1 → x≈+1');
+
+      // Niveaux
+      assert(enemiesForLevel(1) < enemiesForLevel(2), 'Niveaux: plus d\'ennemis au lvl 2');
+
+      // Shrink radius
+      const R0 = safeRadiusAt(100, 10, 60, 0);
+      const Rm = safeRadiusAt(100, 10, 60, 30);
+      const R1 = safeRadiusAt(100, 10, 60, 60);
+      assert(approxEqual(R0, 100, 1e-6), 'Shrink: début = start');
+      assert(approxEqual(Rm, 55, 1e-6), 'Shrink: milieu = moyenne');
+      assert(approxEqual(R1, 10, 1e-6), 'Shrink: fin = min');
+
+      // Breach damage helper (sortie = 10, sinon 0)
+      const dA = breachDamage(true, false);
+      const dB = breachDamage(false, false);
+      const dC = breachDamage(false, true);
+      assert(dA === 10 && dB === 0 && dC === 0, 'BreachDamage: 10 à la sortie, 0 sinon');
+
+      // clampXZToRadius
+      const v1 = new THREE.Vector3(10,0,0); clampXZToRadius(v1, 5);
+      assert(approxEqual(v1.x, 5, 1e-6) && approxEqual(v1.z, 0, 1e-6), 'ClampXZ: réduit correctement (10→5)');
+      const v2 = new THREE.Vector3(0,0,0); clampXZToRadius(v2, 5);
+      assert(approxEqual(v2.length(), 0, 1e-6), 'ClampXZ: zéro reste zéro');
+      const v3 = new THREE.Vector3(3,0,4); clampXZToRadius(v3, 5);
+      assert(approxEqual(v3.x, 3, 1e-6) && approxEqual(v3.z, 4, 1e-6), 'ClampXZ: déjà dans le rayon inchangé');
+
+      console.log(`Tests: ${pass} ok / ${pass+fail}`);
+    }
+    runTests();
+  </script>
+</body>
+</html>

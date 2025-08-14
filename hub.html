@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mini Jeux Hub</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #111;
+            color: white;
+            text-align: center;
+            margin: 0;
+            padding: 0;
+        }
+        h1 {
+            margin-top: 20px;
+        }
+        .game-container {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 20px;
+            padding: 20px;
+        }
+        .game-card {
+            background-color: #222;
+            border-radius: 10px;
+            padding: 15px;
+            width: 300px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.5);
+        }
+        iframe {
+            border: none;
+            width: 100%;
+            height: 400px;
+            border-radius: 10px;
+        }
+        button {
+            background-color: #0f0;
+            border: none;
+            padding: 10px 15px;
+            margin-top: 10px;
+            cursor: pointer;
+            border-radius: 5px;
+            font-size: 16px;
+        }
+        button:hover {
+            background-color: #0c0;
+        }
+    </style>
+</head>
+<body>
+    <h1>🎮 Mini Jeux Hub</h1>
+    <div class="game-container">
+
+        <div class="game-card">
+            <h2>🚗 Jeu de Voiture</h2>
+            <iframe src="voiture.html"></iframe>
+            <button onclick="window.open('voiture.html','_blank')">Jouer en plein écran</button>
+        </div>
+
+        <div class="game-card">
+            <h2>🖱️ Jeu du Click</h2>
+            <iframe src="clicker.html"></iframe>
+            <button onclick="window.open('clicker.html','_blank')">Jouer en plein écran</button>
+        </div>
+
+        <div class="game-card">
+            <h2>🕹️ Jeu 3D Beta</h2>
+            <iframe src="betagame.html"></iframe>
+            <button onclick="window.open('betagame.html','_blank')">Jouer en plein écran</button>
+        </div>
+
+    </div>
+</body>
+</html>
