@@ -1,77 +1,173 @@
 <!DOCTYPE html>
 <html lang="fr">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Mini Jeux Hub</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            background-color: #111;
-            color: white;
-            text-align: center;
-            margin: 0;
-            padding: 0;
-        }
-        h1 {
-            margin-top: 20px;
-        }
-        .game-container {
-            display: flex;
-            flex-wrap: wrap;
-            justify-content: center;
-            gap: 20px;
-            padding: 20px;
-        }
-        .game-card {
-            background-color: #222;
-            border-radius: 10px;
-            padding: 15px;
-            width: 300px;
-            box-shadow: 0 0 10px rgba(0,0,0,0.5);
-        }
-        iframe {
-            border: none;
-            width: 100%;
-            height: 400px;
-            border-radius: 10px;
-        }
-        button {
-            background-color: #0f0;
-            border: none;
-            padding: 10px 15px;
-            margin-top: 10px;
-            cursor: pointer;
-            border-radius: 5px;
-            font-size: 16px;
-        }
-        button:hover {
-            background-color: #0c0;
-        }
-    </style>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Mini Jeux Hub</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background-color: #111;
+      color: white;
+      text-align: center;
+      margin: 0;
+      padding: 0;
+    }
+    /* Header 3D : très peu de marge en haut + manette plus petite */
+    header#site-header {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding-top: 2px; /* moins de marge */
+      padding-bottom: 4px;
+    }
+    #mini3D { width: 360px; height: 150px; position: relative; margin: 0 auto; }
+    #mini3D canvas { display: block; width: 100%; height: 100%; }
+
+    .game-container {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 20px;
+      padding: 8px 20px 16px; /* marge top minimale */
+    }
+    .game-card {
+      background-color: #222;
+      border-radius: 10px;
+      padding: 15px;
+      width: 300px;
+      box-shadow: 0 0 10px rgba(0,0,0,0.5);
+    }
+    iframe {
+      border: none;
+      width: 100%;
+      height: 400px;
+      border-radius: 10px;
+      background: #000;
+    }
+    button {
+      background-color: #0f0;
+      border: none;
+      padding: 10px 15px;
+      margin-top: 10px;
+      cursor: pointer;
+      border-radius: 5px;
+      font-size: 16px;
+    }
+    button:hover { background-color: #0c0; }
+
+    /* Optionnel : petit bloc diag masqué par défaut */
+    .diag { display:none; color:#9fd; font-size:12px; margin:8px 0; }
+
+    @media (max-width: 720px) {
+      #mini3D { width: 260px; height: 120px; }
+      iframe { height: 320px; }
+    }
+      iframe { height: 320px; }
+    }
+  </style>
+  <!-- Import map pour utiliser THREE en module dans cet environnement -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.160.0/build/three.module.js"
+    }
+  }
+  </script>
 </head>
 <body>
-    <h1>🎮 Mini Jeux Hub</h1>
-    <div class="game-container">
+  <!-- Nouveau header avec miniature 3D qui remplace l'ancien <h1> -->
+  <header id="site-header">
+    <div id="mini3D" aria-label="Manette NES 3D tournante"></div>
+  </header>
 
-        <div class="game-card">
-            <h2>🚗 Jeu de Voiture</h2>
-            <iframe src="voiture.html"></iframe>
-            <button onclick="window.open('voiture.html','_blank')">Jouer en plein écran</button>
-        </div>
-
-        <div class="game-card">
-            <h2>🖱️ Jeu du Click</h2>
-            <iframe src="clicker.html"></iframe>
-            <button onclick="window.open('clicker.html','_blank')">Jouer en plein écran</button>
-        </div>
-
-        <div class="game-card">
-            <h2>🕹️ Jeu 3D Beta</h2>
-            <iframe src="betagame.html"></iframe>
-            <button onclick="window.open('betagame.html','_blank')">Jouer en plein écran</button>
-        </div>
-
+  <div class="game-container">
+    <div class="game-card">
+      <h2>🚗 Jeu de Voiture</h2>
+      <iframe src="voiture.html"></iframe>
+      <button onclick="window.open('voiture.html','_blank')">Jouer en plein écran</button>
     </div>
+
+    <div class="game-card">
+      <h2>🖱️ Jeu du Click</h2>
+      <iframe src="clicker.html"></iframe>
+      <button onclick="window.open('clicker.html','_blank')">Jouer en plein écran</button>
+    </div>
+
+    <div class="game-card">
+      <h2>🕹️ Jeu 3D Beta</h2>
+      <iframe src="betagame.html"></iframe>
+      <button onclick="window.open('betagame.html','_blank')">Jouer en plein écran</button>
+    </div>
+  </div>
+
+  <div class="diag" id="diag"></div>
+
+  <script type="module">
+    import * as THREE from 'three';
+
+    // Cible du header 3D
+    const host = document.getElementById('mini3D');
+
+    // Scène minimaliste (pas de sol / pas de plateforme)
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 100);
+    camera.position.set(1.6, 1.0, 1.6);
+
+    const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:true });
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    host.appendChild(renderer.domElement);
+
+    // Éclairage simple pour rester léger
+    scene.add(new THREE.AmbientLight(0xffffff, 0.9));
+    const dir = new THREE.DirectionalLight(0xffffff, 0.4); dir.position.set(2,2,2); scene.add(dir);
+
+    // — NES procédurale compacte (groupe mis à l'échelle pour être plus petite) —
+    const bodyMat   = new THREE.MeshPhysicalMaterial({ color:0xc8c8c8, roughness:0.85, metalness:0.05, clearcoat:0.2 });
+    const panelMat  = new THREE.MeshPhysicalMaterial({ color:0x1f232b, roughness:0.9,  metalness:0.05 });
+    const dpadMat   = new THREE.MeshPhysicalMaterial({ color:0x2b303b, roughness:0.6 });
+    const redMat    = new THREE.MeshPhysicalMaterial({ color:0xd62828, roughness:0.4, clearcoat:0.6 });
+    const darkMat   = new THREE.MeshPhysicalMaterial({ color:0x3a404c, roughness:0.7 });
+
+    const controller = new THREE.Group(); controller.name='nesMini'; scene.add(controller);
+    controller.scale.set(0.95, 0.95, 0.95); // manette plus grande // manette plus petite
+
+    const bodyW=1.9, bodyH=0.22, bodyD=0.78;
+    const body = new THREE.Mesh(new THREE.BoxGeometry(bodyW, bodyH, bodyD), bodyMat); body.position.y = bodyH/2; controller.add(body);
+    const panel = new THREE.Mesh(new THREE.BoxGeometry(bodyW*0.9, 0.01, bodyD*0.78), panelMat); const topY = body.position.y + bodyH/2 + 0.005; panel.position.set(0, topY, 0); controller.add(panel);
+    const stripe = new THREE.Mesh(new THREE.BoxGeometry(bodyW*0.55, 0.006, 0.06), redMat); stripe.position.set(-0.12, topY+0.008, -0.15); controller.add(stripe);
+    const dpad = new THREE.Group(); const dpY = topY + 0.012; const armX = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.02, 0.07), dpadMat); const armZ = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.02, 0.22), dpadMat); const pivot = new THREE.Mesh(new THREE.CylinderGeometry(0.03,0.03,0.02,20), dpadMat); pivot.rotation.x = Math.PI/2; dpad.add(armX,armZ,pivot); dpad.position.set(-0.52, dpY, 0); controller.add(dpad);
+    function faceButton(x,z){ const h=0.02; const b = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.075, h, 24), redMat); b.position.set(x, topY + h/2, z); controller.add(b);} faceButton(0.47, 0.04); faceButton(0.64, 0.04);
+    function midButton(x,z){ const b = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.015, 0.05), darkMat); b.position.set(x, topY + 0.0075, z); controller.add(b);} midButton(-0.04, -0.08); midButton(0.10, -0.08);
+
+    // Rotation sur elle-même
+    const clock = new THREE.Clock();
+    function animate(){
+      const dt = Math.min(clock.getDelta(), 0.05);
+      controller.rotation.y += dt * 0.8;
+      renderer.render(scene, camera);
+      requestAnimationFrame(animate);
+    }
+
+    // Ajuste le rendu à la taille du header
+    function fit(){
+      const r = host.getBoundingClientRect();
+      const w = Math.max(200, Math.floor(r.width));
+      const h = Math.max(90, Math.floor(r.height));
+      renderer.setSize(w, h, false);
+      camera.aspect = w/h; camera.updateProjectionMatrix();
+      camera.lookAt(0, 0.20, 0);
+    }
+    window.addEventListener('resize', fit);
+    fit();
+    animate();
+
+    // « Tests » légers en console pour valider l'intégration
+    console.assert(typeof THREE !== 'undefined', 'THREE chargé');
+    console.assert(!!renderer.getContext(), 'WebGL initialisé');
+    const r0 = controller.rotation.y; setTimeout(()=>{
+      console.assert(Math.abs(controller.rotation.y - r0) > 0.05, 'La manette tourne sur elle‑même');
+    }, 500);
+  </script>
 </body>
 </html>
