@@ -6,7 +6,7 @@
   <style>
     body {
       margin: 0;
-      background: linear-gradient(to bottom, #87ceeb, #e0f7fa); /* ciel clair dégradé */
+      background: linear-gradient(to bottom, #87ceeb, #e0f7fa);
       overflow: hidden;
       font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
       color: #fff;
@@ -32,12 +32,11 @@
       font-weight: bold;
       letter-spacing: 1px;
     }
-    #gameOverMenu {
-      display: none;
+    #overlay {
       position: absolute;
       top: 50%;
       left: 50%;
-      transform: translate(-50%,-50%);
+      transform: translate(-50%, -50%);
       background: rgba(255,255,255,0.9);
       padding: 40px 60px;
       border-radius: 25px;
@@ -47,16 +46,13 @@
       box-shadow: 0 8px 20px rgba(0,0,0,0.4);
       animation: popin 0.5s ease;
     }
-    #gameOverMenu h1 {
+    #overlay.hidden { display: none; }
+    #overlay h1 {
       margin: 0 0 15px;
       font-size: 36px;
       color: #e63946;
     }
-    #gameOverMenu p {
-      margin: 10px 0;
-      font-size: 20px;
-    }
-    #gameOverMenu span {
+    #overlay span {
       display: block;
       margin-top: 20px;
       font-size: 18px;
@@ -70,12 +66,15 @@
   </style>
 </head>
 <body>
-<div id="hud">
+<div id="hud" class="hidden">
   <div id="score">Score: 0</div>
   <div id="speed">Vitesse: 0 km/h</div>
   <div id="best">Record: 0</div>
 </div>
-<div id="gameOverMenu"></div>
+<div id="overlay">
+  <h1>🚗 CAR GAME </h1>
+  <span>Press SPACE to start.</span>
+</div>
 
 <script type="module">
 import * as THREE from 'https://unpkg.com/three@0.160.0/build/three.module.js';
@@ -130,7 +129,7 @@ scene.add(car);
 let obstacles = [];
 function spawnObstacle(){
   let lanes=[0,1,2];
-  const count = Math.random()<0.5?1:2; // 1 ou 2 obstacles
+  const count = Math.random()<0.5?1:2;
   for(let i=0;i<count;i++){
     const idx = Math.floor(Math.random()*lanes.length);
     const lane=lanes.splice(idx,1)[0];
@@ -159,7 +158,13 @@ function spawnTree(){
 
 // Controls
 let targetLane = 1;
+let started=false;
 window.addEventListener('keydown', e=>{
+  if(!started && e.key===' '){
+    started=true;
+    document.getElementById('overlay').classList.add('hidden');
+    document.getElementById('hud').classList.remove('hidden');
+  }
   if(gameOver){
     if(e.key===' '){ document.location.reload(); }
     return;
@@ -175,7 +180,6 @@ let speed = 10;
 const scoreEl=document.getElementById("score");
 const bestEl=document.getElementById("best");
 const speedEl=document.getElementById("speed");
-const gameOverMenu=document.getElementById("gameOverMenu");
 
 // Game state
 let gameOver=false;
@@ -184,13 +188,14 @@ function endGame(){
   gameOver=true;
   best=Math.max(best,Math.floor(score));
   localStorage.setItem('bestScore',String(best));
-  gameOverMenu.innerHTML = `
+  const overlay=document.getElementById("overlay");
+  overlay.innerHTML = `
     <h1>🚗 CRASH !</h1>
     <p>Score: ${Math.floor(score)}</p>
     <p>Record: ${best}</p>
     <span>Appuie ESPACE pour recommencer</span>
   `;
-  gameOverMenu.style.display="block";
+  overlay.classList.remove('hidden');
 }
 
 // Collision helper
@@ -200,6 +205,11 @@ const tmpBox=new THREE.Box3();
 let last=0;
 function animate(t){
   const dt=(t-last)/1000||0; last=t;
+  if(!started){
+    renderer.render(scene,camera);
+    requestAnimationFrame(animate);
+    return;
+  }
   if(gameOver){
     renderer.render(scene,camera);
     requestAnimationFrame(animate);
@@ -221,7 +231,6 @@ function animate(t){
   obstacles = obstacles.filter(o=>{ if(o.position.z>10){ scene.remove(o); return false;} return true; });
   trees = trees.filter(tr=>{ if(tr.position.z>10){ scene.remove(tr); return false;} return true; });
 
-  // Collisions
   carBox.setFromObject(car).expandByScalar(-0.2);
   for(const o of obstacles){
     tmpBox.setFromObject(o).expandByScalar(-0.2);
